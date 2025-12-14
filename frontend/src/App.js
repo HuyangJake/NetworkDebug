@@ -7,6 +7,7 @@ import PortScan from './pages/PortScan';
 import DNSResolve from './pages/DNSResolve';
 import Ping from './pages/Ping';
 import MTR from './pages/MTR';
+import HttpTest from './pages/HttpTest';
 import Layout from './components/Layout';
 
 const theme = createTheme({
@@ -32,6 +33,7 @@ function App() {
             <Route path="/dns-resolve" element={<DNSResolve />} />
             <Route path="/ping" element={<Ping />} />
             <Route path="/mtr" element={<MTR />} />
+            <Route path="/http-test" element={<HttpTest />} />
           </Routes>
         </Layout>
       </Router>

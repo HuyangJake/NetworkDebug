@@ -15,6 +15,7 @@ import {
   Dns as DnsIcon,
   NetworkPing as PingIcon,
   Route as MtrIcon,
+  Http as HttpIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
 
@@ -66,6 +67,13 @@ const Home = () => {
       icon: <MtrIcon sx={{ fontSize: 40 }} />,
       path: '/mtr',
       color: '#9c27b0',
+    },
+    {
+      title: 'HTTP测试',
+      description: '测试HTTP/HTTPS协议连接，检查服务可访问性',
+      icon: <HttpIcon sx={{ fontSize: 40 }} />,
+      path: '/http-test',
+      color: '#d32f2f',
     },
   ];
 

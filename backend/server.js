@@ -7,6 +7,7 @@ const { exec } = require('child_process');
 const net = require('net');
 const https = require('https');
 const http = require('http');
+const { URL } = require('url');
 
 const app = express();
 const PORT = 3001;
@@ -391,15 +392,55 @@ app.post('/api/ping', async (req, res) => {
 
   try {
     const isWindows = process.platform === 'win32';
-    const pingCommand = isWindows 
-      ? `ping -n ${count} ${host}`
-      : `ping -c ${count} ${host}`;
+
+    // 检测是否为IPv6地址格式（包含冒号）
+    const isIPv6Address = host.includes(':');
+
+    // 尝试DNS解析以检查是否有IPv6记录
+    let hasIPv6Record = false;
+    try {
+      const lookup = promisify(dns.lookup);
+      const addresses = await lookup(host, { all: true });
+      hasIPv6Record = addresses.some(addr => addr.family === 6);
+    } catch (dnsError) {
+      // DNS解析失败，继续使用默认ping命令
+    }
+
+    // 决定使用哪个ping命令
+    const useIPv6 = isIPv6Address || hasIPv6Record;
+
+    let pingCommand;
+    if (isWindows) {
+      // Windows使用 -6 参数来ping IPv6
+      pingCommand = useIPv6 
+        ? `ping -6 -n ${count} ${host}`
+        : `ping -n ${count} ${host}`;
+    } else {
+      // Unix/Linux/macOS使用ping6命令来ping IPv6
+      pingCommand = useIPv6 
+        ? `ping6 -c ${count} ${host}`
+        : `ping -c ${count} ${host}`;
+    }
 
     exec(pingCommand, { timeout: 30000 }, (error, stdout, stderr) => {
-      if (error && error.code !== 0) {
+      if (error) {
+        // ping6 在某些情况下即使有输出也会返回非零退出码
+        // 如果 stdout 有内容，我们仍然返回结果
+        if (stdout && stdout.trim().length > 0) {
+          return res.json({
+            host,
+            count,
+            timestamp: new Date().toISOString(),
+            output: stdout,
+            raw: stdout,
+            warning: '命令执行完成但返回了非零退出码'
+          });
+        }
+        
         return res.status(500).json({ 
           error: error.message,
-          output: stderr || stdout 
+          output: stderr || stdout,
+          code: error.code
         });
       }
 
@@ -455,6 +496,289 @@ app.post('/api/mtr', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// 诊断HTTP连接失败原因
+async function diagnoseHttpFailure(hostname, port, isHttps) {
+  const diagnosis = {
+    dns: null,
+    ping: null,
+    portScan: null,
+    analysis: [],
+    recommendations: []
+  };
+
+  try {
+    // 1. DNS解析
+    try {
+      const lookup = promisify(dns.lookup);
+      const addresses = await lookup(hostname, { all: true });
+      diagnosis.dns = {
+        success: true,
+        addresses: addresses.map(addr => ({
+          address: addr.address,
+          family: addr.family === 4 ? 'IPv4' : 'IPv6'
+        }))
+      };
+    } catch (e) {
+      diagnosis.dns = {
+        success: false,
+        error: e.message
+      };
+      diagnosis.analysis.push('DNS解析失败：无法将域名解析为IP地址');
+      diagnosis.recommendations.push('检查域名是否正确，或DNS服务器是否可访问');
+      return diagnosis; // DNS失败，无需继续
+    }
+
+    // 2. Ping测试
+    try {
+      const isWindows = process.platform === 'win32';
+      
+      // 检查是否有IPv6地址
+      const hasIPv6 = diagnosis.dns.addresses.some(addr => addr.family === 'IPv6');
+      const isIPv6Address = hostname.includes(':');
+      const useIPv6 = isIPv6Address || hasIPv6;
+      
+      let pingCommand;
+      if (isWindows) {
+        pingCommand = useIPv6 ? `ping -6 -n 2 ${hostname}` : `ping -n 2 ${hostname}`;
+      } else {
+        pingCommand = useIPv6 ? `ping6 -c 2 ${hostname}` : `ping -c 2 ${hostname}`;
+      }
+      
+      await new Promise((resolve, reject) => {
+        exec(pingCommand, { timeout: 10000 }, (error, stdout) => {
+          if (error && error.code !== 0) {
+            // 即使有错误，如果stdout有内容，可能仍然成功
+            if (stdout && stdout.trim().length > 0) {
+              diagnosis.ping = {
+                success: true,
+                output: stdout
+              };
+            } else {
+              diagnosis.ping = {
+                success: false,
+                error: 'Ping失败',
+                output: stdout
+              };
+              diagnosis.analysis.push('网络连通性测试失败：无法ping通目标主机');
+              diagnosis.recommendations.push('目标主机可能不在线，或网络路由有问题');
+            }
+          } else {
+            diagnosis.ping = {
+              success: true,
+              output: stdout
+            };
+          }
+          resolve();
+        });
+      });
+    } catch (e) {
+      diagnosis.ping = {
+        success: false,
+        error: e.message
+      };
+    }
+
+    // 3. 端口扫描
+    try {
+      const portResult = await scanPort(hostname, port, 5000);
+      diagnosis.portScan = {
+        port: port,
+        status: portResult.status,
+        response: portResult.response,
+        duration: portResult.duration,
+        errorCode: portResult.errorCode
+      };
+
+      if (portResult.status === 'filtered' && portResult.response === 'no_response') {
+        diagnosis.analysis.push(`端口${port}被过滤或无响应：可能被防火墙阻止`);
+        diagnosis.recommendations.push('检查防火墙设置，确认端口是否开放');
+      } else if (portResult.status === 'closed' && portResult.response === 'responded') {
+        diagnosis.analysis.push(`端口${port}已关闭：端口存在但没有服务监听`);
+        diagnosis.recommendations.push('确认目标服务是否正在运行');
+      } else if (portResult.status === 'open') {
+        diagnosis.analysis.push(`端口${port}已开放：端口可以连接，但HTTP/HTTPS协议层可能有问题`);
+        diagnosis.recommendations.push('检查SSL证书（HTTPS）或HTTP服务配置');
+      }
+    } catch (e) {
+      diagnosis.portScan = {
+        error: e.message
+      };
+    }
+
+    // 综合分析（避免重复）
+    if (diagnosis.ping && !diagnosis.ping.success && 
+        !diagnosis.analysis.some(a => a.includes('网络连通性测试失败'))) {
+      diagnosis.analysis.push('主机不可达：网络层连接失败');
+      if (!diagnosis.recommendations.some(r => r.includes('网络连接'))) {
+        diagnosis.recommendations.push('检查网络连接、路由配置或目标主机是否在线');
+      }
+    } else if (diagnosis.portScan && diagnosis.portScan.status === 'open' &&
+               !diagnosis.analysis.some(a => a.includes('端口已开放但HTTP'))) {
+      diagnosis.analysis.push('端口开放但HTTP/HTTPS连接失败：可能是协议层问题');
+      if (!diagnosis.recommendations.some(r => r.includes('SSL/TLS'))) {
+        diagnosis.recommendations.push('检查SSL/TLS配置、证书有效性或HTTP服务状态');
+      }
+    } else if (diagnosis.portScan && diagnosis.portScan.status === 'filtered' &&
+               !diagnosis.analysis.some(a => a.includes('端口被过滤'))) {
+      diagnosis.analysis.push('端口被过滤：防火墙或安全策略阻止了连接');
+      if (!diagnosis.recommendations.some(r => r.includes('防火墙规则'))) {
+        diagnosis.recommendations.push('检查防火墙规则、安全组配置或网络ACL');
+      }
+    }
+
+  } catch (error) {
+    diagnosis.error = error.message;
+  }
+
+  return diagnosis;
+}
+
+// HTTP/HTTPS连接测试
+app.post('/api/http-test', async (req, res) => {
+  const { url, method = 'GET', timeout = 10000, followRedirects = true, autoDiagnose = true } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: '需要提供URL' });
+  }
+
+  try {
+    const testUrl = new URL(url);
+    const isHttps = testUrl.protocol === 'https:';
+    const client = isHttps ? https : http;
+    const startTime = Date.now();
+    const targetPort = testUrl.port || (isHttps ? 443 : 80);
+
+    const options = {
+      hostname: testUrl.hostname,
+      port: targetPort,
+      path: testUrl.pathname + testUrl.search,
+      method: method.toUpperCase(),
+      timeout: timeout,
+      headers: {
+        'User-Agent': 'NetworkDebug-Tool/1.0'
+      }
+    };
+
+    const makeRequest = (requestOptions, requestClient, redirectCount = 0, originalUrl = url) => {
+      return new Promise((resolve, reject) => {
+        const req = requestClient.request(requestOptions, (response) => {
+          const responseTime = Date.now() - startTime;
+          let data = '';
+
+          response.on('data', (chunk) => {
+            data += chunk.toString();
+          });
+
+          response.on('end', () => {
+            let finalUrl = originalUrl;
+            if (redirectCount > 0) {
+              const protocol = requestClient === https ? 'https' : 'http';
+              const port = requestOptions.port && 
+                          requestOptions.port !== (protocol === 'https' ? 443 : 80) 
+                          ? `:${requestOptions.port}` : '';
+              finalUrl = `${protocol}://${requestOptions.hostname}${port}${requestOptions.path}`;
+            }
+            
+            const result = {
+              url: originalUrl,
+              statusCode: response.statusCode,
+              statusMessage: response.statusMessage,
+              headers: response.headers,
+              responseTime: `${responseTime}ms`,
+              success: response.statusCode >= 200 && response.statusCode < 400,
+              redirectCount: redirectCount,
+              finalUrl: finalUrl
+            };
+
+            // 处理重定向
+            if (followRedirects && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+              if (redirectCount >= 5) {
+                result.error = '重定向次数过多（超过5次）';
+                resolve(result);
+                return;
+              }
+
+              try {
+                const redirectUrl = new URL(response.headers.location, originalUrl);
+                const redirectOptions = {
+                  hostname: redirectUrl.hostname,
+                  port: redirectUrl.port || (redirectUrl.protocol === 'https:' ? 443 : 80),
+                  path: redirectUrl.pathname + redirectUrl.search,
+                  method: method.toUpperCase(),
+                  timeout: timeout,
+                  headers: {
+                    'User-Agent': 'NetworkDebug-Tool/1.0'
+                  }
+                };
+                const redirectClient = redirectUrl.protocol === 'https:' ? https : http;
+                
+                makeRequest(redirectOptions, redirectClient, redirectCount + 1, originalUrl).then(resolve).catch(reject);
+              } catch (e) {
+                result.error = `重定向URL解析失败: ${e.message}`;
+                resolve(result);
+              }
+            } else {
+              resolve(result);
+            }
+          });
+        });
+
+        req.on('error', (error) => {
+          const responseTime = Date.now() - startTime;
+          resolve({
+            url: originalUrl,
+            success: false,
+            error: error.message,
+            errorCode: error.code,
+            responseTime: `${responseTime}ms`
+          });
+        });
+
+        req.on('timeout', () => {
+          req.destroy();
+          const responseTime = Date.now() - startTime;
+          resolve({
+            url: originalUrl,
+            success: false,
+            error: '请求超时',
+            responseTime: `${responseTime}ms`
+          });
+        });
+
+        req.setTimeout(timeout);
+        req.end();
+      });
+    };
+
+    const result = await makeRequest(options, client);
+    
+    // 如果失败且启用自动诊断，执行诊断
+    if (!result.success && autoDiagnose) {
+      result.diagnosis = await diagnoseHttpFailure(testUrl.hostname, targetPort, isHttps);
+    }
+    
+    res.json(result);
+  } catch (error) {
+    const errorResult = {
+      url: url,
+      success: false,
+      error: error.message
+    };
+    
+    // 如果URL解析失败，尝试诊断
+    if (autoDiagnose && error.message.includes('Invalid URL')) {
+      try {
+        const testUrl = new URL(url);
+        errorResult.diagnosis = await diagnoseHttpFailure(testUrl.hostname, testUrl.port || (testUrl.protocol === 'https:' ? 443 : 80), testUrl.protocol === 'https:');
+      } catch (e) {
+        // 忽略诊断错误
+      }
+    }
+    
+    res.status(500).json(errorResult);
   }
 });
 

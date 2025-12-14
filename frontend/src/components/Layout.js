@@ -20,6 +20,7 @@ const Layout = ({ children }) => {
     { label: 'DNS解析', path: '/dns-resolve' },
     { label: 'Ping', path: '/ping' },
     { label: 'MTR', path: '/mtr' },
+    { label: 'HTTP测试', path: '/http-test' },
   ];
 
   return (
