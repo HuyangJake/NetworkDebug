@@ -18,8 +18,11 @@ app.use(express.json());
 // 获取公网IP地址
 app.get('/api/ip-addresses', async (req, res) => {
   try {
-    const ipv4 = await getPublicIPv4();
-    const ipv6 = await getPublicIPv6();
+    // 并行获取IPv4和IPv6，每个都有重试机制
+    const [ipv4, ipv6] = await Promise.all([
+      getPublicIPv4(),
+      getPublicIPv6()
+    ]);
 
     res.json({ 
       ipv4: ipv4 ? [{ address: ipv4 }] : [],
@@ -46,17 +49,60 @@ function isValidIPv4(ip) {
   });
 }
 
-// 获取公网IPv4地址
-function getPublicIPv4() {
+// 延迟函数
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// 获取公网IPv4地址（带重试机制）
+async function getPublicIPv4() {
+  const maxRetries = 3;
+  const timeout = 15000; // 增加到15秒
+  const retryDelay = 1000; // 重试间隔1秒
+
+  // 主服务列表
+  const primaryServices = [
+    { hostname: 'api.ipify.org', path: '/?format=json', useHttps: true },
+    { hostname: 'ifconfig.me', path: '/ip', useHttps: false }
+  ];
+
+  // 尝试每个服务，每个服务重试maxRetries次
+  for (const service of primaryServices) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const ip = await getPublicIPv4FromService(service, timeout);
+        if (ip) {
+          return ip;
+        }
+      } catch (error) {
+        // 最后一次尝试失败，继续下一个服务
+        if (attempt === maxRetries - 1) {
+          continue;
+        }
+      }
+      
+      // 如果不是最后一次尝试，等待后重试
+      if (attempt < maxRetries - 1) {
+        await delay(retryDelay);
+      }
+    }
+  }
+
+  return null;
+}
+
+// 从指定服务获取IPv4地址
+function getPublicIPv4FromService(service, timeout) {
   return new Promise((resolve, reject) => {
+    const client = service.useHttps ? https : http;
     const options = {
-      hostname: 'api.ipify.org',
-      path: '/?format=json',
+      hostname: service.hostname,
+      path: service.path,
       method: 'GET',
-      timeout: 5000
+      timeout: timeout
     };
 
-    const req = https.request(options, (res) => {
+    const req = client.request(options, (res) => {
       let data = '';
 
       res.on('data', (chunk) => {
@@ -65,94 +111,104 @@ function getPublicIPv4() {
 
       res.on('end', () => {
         try {
-          const result = JSON.parse(data);
-          const ip = result.ip;
-          // 验证返回的IP是否为IPv4
-          if (isValidIPv4(ip)) {
-            resolve(ip);
+          if (service.path.includes('format=json')) {
+            // JSON格式响应
+            const result = JSON.parse(data);
+            const ip = result.ip;
+            if (isValidIPv4(ip)) {
+              resolve(ip);
+            } else {
+              reject(new Error('Invalid IPv4 format'));
+            }
           } else {
-            // 如果不是IPv4，尝试备用服务
-            getPublicIPv4Fallback().then(resolve).catch(() => resolve(null));
+            // 纯文本响应
+            const trimmed = data.trim();
+            if (isValidIPv4(trimmed)) {
+              resolve(trimmed);
+            } else {
+              reject(new Error('Invalid IPv4 format'));
+            }
           }
         } catch (e) {
-          // 如果解析失败，尝试直接返回数据
-          const trimmed = data.trim();
-          if (isValidIPv4(trimmed)) {
-            resolve(trimmed);
-          } else {
-            // 如果不是IPv4，尝试备用服务
-            getPublicIPv4Fallback().then(resolve).catch(() => resolve(null));
-          }
+          reject(e);
         }
       });
     });
 
     req.on('error', (error) => {
-      // 如果第一个服务失败，尝试备用服务
-      getPublicIPv4Fallback().then(resolve).catch(() => resolve(null));
+      reject(error);
     });
 
     req.on('timeout', () => {
       req.destroy();
-      getPublicIPv4Fallback().then(resolve).catch(() => resolve(null));
+      reject(new Error('Request timeout'));
     });
 
     req.end();
   });
 }
 
-// 获取公网IPv4备用方法
-function getPublicIPv4Fallback() {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'ifconfig.me',
-      path: '/ip',
-      method: 'GET',
-      timeout: 5000
-    };
+// 验证是否为IPv6地址
+function isValidIPv6(ip) {
+  if (!ip || typeof ip !== 'string') return false;
+  // 简单的IPv6格式检查：包含冒号
+  if (!ip.includes(':')) return false;
+  // IPv6地址验证（支持压缩格式）
+  // 匹配标准IPv6格式：xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx
+  // 或压缩格式：::1, 2001::1 等
+  const ipv6Regex = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:)*::([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4}|::1|([0-9a-fA-F]{1,4}:)+::)$/;
+  return ipv6Regex.test(ip) || ip === '::1' || (ip.includes('::') && ip.split('::').length === 2);
+}
 
-    const req = http.request(options, (res) => {
-      let data = '';
+// 获取公网IPv6地址（带重试机制）
+async function getPublicIPv6() {
+  const maxRetries = 3;
+  const timeout = 15000; // 增加到15秒
+  const retryDelay = 1000; // 重试间隔1秒
 
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
+  // 服务列表（IPv6服务较少，但可以添加更多）
+  const services = [
+    { hostname: 'api64.ipify.org', path: '/?format=json', useHttps: true },
+    { hostname: 'ipv6.icanhazip.com', path: '/', useHttps: false }
+  ];
 
-      res.on('end', () => {
-        const trimmed = data.trim();
-        // 验证返回的IP是否为IPv4，如果不是则返回null
-        if (isValidIPv4(trimmed)) {
-          resolve(trimmed);
-        } else {
-          resolve(null);
+  // 尝试每个服务，每个服务重试maxRetries次
+  for (const service of services) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const ip = await getPublicIPv6FromService(service, timeout);
+        if (ip) {
+          return ip;
         }
-      });
-    });
+      } catch (error) {
+        // 最后一次尝试失败，继续下一个服务
+        if (attempt === maxRetries - 1) {
+          continue;
+        }
+      }
+      
+      // 如果不是最后一次尝试，等待后重试
+      if (attempt < maxRetries - 1) {
+        await delay(retryDelay);
+      }
+    }
+  }
 
-    req.on('error', () => {
-      resolve(null);
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(null);
-    });
-
-    req.end();
-  });
+  return null;
 }
 
-// 获取公网IPv6地址
-function getPublicIPv6() {
+// 从指定服务获取IPv6地址
+function getPublicIPv6FromService(service, timeout) {
   return new Promise((resolve, reject) => {
+    const client = service.useHttps ? https : http;
     const options = {
-      hostname: 'api64.ipify.org',
-      path: '/?format=json',
+      hostname: service.hostname,
+      path: service.path,
       method: 'GET',
-      timeout: 5000
+      timeout: timeout
     };
 
-    const req = https.request(options, (res) => {
+    const req = client.request(options, (res) => {
       let data = '';
 
       res.on('data', (chunk) => {
@@ -161,27 +217,37 @@ function getPublicIPv6() {
 
       res.on('end', () => {
         try {
-          const result = JSON.parse(data);
-          const ip = result.ip;
-          // 检查是否是IPv6地址
-          if (ip && ip.includes(':')) {
-            resolve(ip);
+          if (service.path.includes('format=json')) {
+            // JSON格式响应
+            const result = JSON.parse(data);
+            const ip = result.ip;
+            if (ip && isValidIPv6(ip)) {
+              resolve(ip);
+            } else {
+              reject(new Error('Invalid IPv6 format'));
+            }
           } else {
-            resolve(null);
+            // 纯文本响应
+            const trimmed = data.trim();
+            if (isValidIPv6(trimmed)) {
+              resolve(trimmed);
+            } else {
+              reject(new Error('Invalid IPv6 format'));
+            }
           }
         } catch (e) {
-          resolve(null);
+          reject(e);
         }
       });
     });
 
-    req.on('error', () => {
-      resolve(null);
+    req.on('error', (error) => {
+      reject(error);
     });
 
     req.on('timeout', () => {
       req.destroy();
-      resolve(null);
+      reject(new Error('Request timeout'));
     });
 
     req.end();

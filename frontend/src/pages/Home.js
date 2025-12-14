@@ -9,6 +9,9 @@ import {
   Button,
   Paper,
   Chip,
+  IconButton,
+  Alert,
+  Link,
 } from '@mui/material';
 import {
   Scanner as ScannerIcon,
@@ -16,6 +19,7 @@ import {
   NetworkPing as PingIcon,
   Route as MtrIcon,
   Http as HttpIcon,
+  Refresh as RefreshIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
 
@@ -23,20 +27,50 @@ const Home = () => {
   const navigate = useNavigate();
   const [ipAddresses, setIpAddresses] = useState({ ipv4: [], ipv6: [] });
   const [loading, setLoading] = useState(true);
+  const [ipv4RetryCount, setIpv4RetryCount] = useState(0);
+  const [ipv6RetryCount, setIpv6RetryCount] = useState(0);
+  const MAX_RETRY_COUNT = 3; // 最多重试3次后显示提示
 
   useEffect(() => {
     fetchIpAddresses();
   }, []);
 
-  const fetchIpAddresses = async () => {
+  const fetchIpAddresses = async (isManualRefresh = false) => {
+    if (isManualRefresh) {
+      setLoading(true);
+    }
+    
     try {
       const response = await axios.get('/api/ip-addresses');
+      const hasIpv4 = response.data.ipv4 && response.data.ipv4.length > 0;
+      const hasIpv6 = response.data.ipv6 && response.data.ipv6.length > 0;
+      
       setIpAddresses(response.data);
+      
+      // 分别跟踪IPv4和IPv6的失败次数
+      if (hasIpv4) {
+        setIpv4RetryCount(0); // 获取成功，重置计数
+      } else {
+        setIpv4RetryCount(prev => prev + 1); // 获取失败，增加计数
+      }
+      
+      if (hasIpv6) {
+        setIpv6RetryCount(0); // 获取成功，重置计数
+      } else {
+        setIpv6RetryCount(prev => prev + 1); // 获取失败，增加计数
+      }
     } catch (error) {
       console.error('获取IP地址失败:', error);
+      // 请求失败时，两个都算失败
+      setIpv4RetryCount(prev => prev + 1);
+      setIpv6RetryCount(prev => prev + 1);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleRefresh = () => {
+    fetchIpAddresses(true);
   };
 
   const tools = [
@@ -82,16 +116,29 @@ const Home = () => {
       <Typography variant="h4" component="h1" gutterBottom>
         网络调试工具
       </Typography>
-      <Typography variant="body1" color="text.secondary" paragraph>
-        当前设备公网IP地址
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="body1" color="text.secondary">
+          当前设备公网IP地址
+        </Typography>
+        <IconButton
+          onClick={handleRefresh}
+          disabled={loading}
+          color="primary"
+          aria-label="刷新IP地址"
+          sx={{ ml: 2 }}
+        >
+          <RefreshIcon />
+        </IconButton>
+      </Box>
 
       <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid item xs={12} md={6}>
           <Paper sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              公网 IPv4 地址
-            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Typography variant="h6">
+                公网 IPv4 地址
+              </Typography>
+            </Box>
             {loading ? (
               <Typography>正在获取...</Typography>
             ) : ipAddresses.ipv4.length > 0 ? (
@@ -103,15 +150,37 @@ const Home = () => {
                 />
               </Box>
             ) : (
-              <Typography color="text.secondary">未检测到公网IPv4地址</Typography>
+              <Box>
+                <Typography color="text.secondary" sx={{ mb: 2 }}>
+                  未检测到公网IPv4地址
+                </Typography>
+                {ipv4RetryCount >= MAX_RETRY_COUNT && !loading && (
+                  <Alert severity="info" sx={{ mt: 2 }}>
+                    <Typography variant="body2">
+                      多次尝试后仍无法获取公网IPv4地址。您可以访问{' '}
+                      <Link 
+                        href="https://www.bj-ipv6.com/z/" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        underline="always"
+                      >
+                        北京市IPv6发展平台
+                      </Link>
+                      {' '}自行确认您的公网IP地址。
+                    </Typography>
+                  </Alert>
+                )}
+              </Box>
             )}
           </Paper>
         </Grid>
         <Grid item xs={12} md={6}>
           <Paper sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              公网 IPv6 地址
-            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Typography variant="h6">
+                公网 IPv6 地址
+              </Typography>
+            </Box>
             {loading ? (
               <Typography>正在获取...</Typography>
             ) : ipAddresses.ipv6.length > 0 ? (
@@ -123,7 +192,27 @@ const Home = () => {
                 />
               </Box>
             ) : (
-              <Typography color="text.secondary">未检测到公网IPv6地址</Typography>
+              <Box>
+                <Typography color="text.secondary" sx={{ mb: 2 }}>
+                  未检测到公网IPv6地址
+                </Typography>
+                {ipv6RetryCount >= MAX_RETRY_COUNT && !loading && (
+                  <Alert severity="info" sx={{ mt: 2 }}>
+                    <Typography variant="body2">
+                      多次尝试后仍无法获取公网IPv6地址。您可以访问{' '}
+                      <Link 
+                        href="https://www.bj-ipv6.com/z/" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        underline="always"
+                      >
+                        北京市IPv6发展平台
+                      </Link>
+                      {' '}自行确认您的公网IP地址。
+                    </Typography>
+                  </Alert>
+                )}
+              </Box>
             )}
           </Paper>
         </Grid>
