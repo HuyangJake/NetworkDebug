@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Paper,
@@ -26,12 +26,22 @@ import {
   List,
   ListItem,
   ListItemText,
+  IconButton,
+  ListItemSecondaryAction,
+  Divider as ListDivider,
+  Tooltip,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import WarningIcon from '@mui/icons-material/Warning';
+import DeleteIcon from '@mui/icons-material/Delete';
+import HistoryIcon from '@mui/icons-material/History';
+import ClearAllIcon from '@mui/icons-material/ClearAll';
 import axios from 'axios';
+
+const STORAGE_KEY = 'httpTestHistory';
+const MAX_HISTORY = 20;
 
 const HttpTest = () => {
   const [url, setUrl] = useState('');
@@ -41,6 +51,58 @@ const HttpTest = () => {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
   const [error, setError] = useState('');
+  const [history, setHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
+
+  // 从localStorage加载历史记录
+  useEffect(() => {
+    const savedHistory = localStorage.getItem(STORAGE_KEY);
+    if (savedHistory) {
+      try {
+        setHistory(JSON.parse(savedHistory));
+      } catch (e) {
+        console.error('加载历史记录失败:', e);
+      }
+    }
+  }, []);
+
+  // 保存历史记录到localStorage
+  const saveHistory = (newHistory) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory));
+    setHistory(newHistory);
+  };
+
+  // 添加历史记录
+  const addToHistory = (urlValue) => {
+    const trimmedUrl = urlValue.trim();
+    if (!trimmedUrl) return;
+
+    const newHistory = [
+      trimmedUrl,
+      ...history.filter((item) => item !== trimmedUrl),
+    ].slice(0, MAX_HISTORY);
+
+    saveHistory(newHistory);
+  };
+
+  // 删除单个历史记录
+  const deleteHistoryItem = (urlValue) => {
+    const newHistory = history.filter((item) => item !== urlValue);
+    saveHistory(newHistory);
+  };
+
+  // 清空所有历史记录
+  const clearAllHistory = () => {
+    if (window.confirm('确定要清空所有历史记录吗？')) {
+      saveHistory([]);
+    }
+  };
+
+  // 使用历史记录填充输入框
+  const handleHistoryItem = (urlValue) => {
+    setUrl(urlValue);
+    setShowHistory(false);
+  };
 
   const handleTest = async () => {
     if (!url.trim()) {
@@ -61,13 +123,16 @@ const HttpTest = () => {
     setResults(null);
 
     try {
+      const trimmedUrl = url.trim();
       const response = await axios.post('/api/http-test', {
-        url: url.trim(),
+        url: trimmedUrl,
         method,
         timeout,
         followRedirects,
       });
       setResults(response.data);
+      // 测试成功后添加到历史记录
+      addToHistory(trimmedUrl);
     } catch (err) {
       setError(err.response?.data?.error || 'HTTP测试失败');
       setResults({
@@ -91,20 +156,116 @@ const HttpTest = () => {
       <Paper sx={{ p: 3, mb: 3 }}>
         <Grid container spacing={2}>
           <Grid item xs={12} sm={8}>
-            <TextField
-              fullWidth
-              label="URL"
-              placeholder="例如: https://example.com 或 http://192.168.1.1:8080"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              variant="outlined"
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
-                  handleTest();
-                }
-              }}
-              helperText="必须包含协议（http://或https://）"
-            />
+            <Box sx={{ position: 'relative' }}>
+              <TextField
+                fullWidth
+                label="URL"
+                placeholder="例如: https://example.com 或 http://192.168.1.1:8080"
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  setShowHistory(e.target.value === '' && history.length > 0);
+                }}
+                onFocus={() => {
+                  if (history.length > 0) {
+                    setShowHistory(true);
+                  }
+                }}
+                onBlur={() => {
+                  setTimeout(() => setShowHistory(false), 200);
+                }}
+                variant="outlined"
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    handleTest();
+                  }
+                }}
+                helperText="必须包含协议（http://或https://）"
+                InputProps={{
+                  endAdornment: history.length > 0 && (
+                    <Tooltip title="历史记录">
+                      <IconButton
+                        onClick={() => setShowHistory(!showHistory)}
+                        edge="end"
+                        size="small"
+                      >
+                        <HistoryIcon />
+                      </IconButton>
+                    </Tooltip>
+                  ),
+                }}
+              />
+              {showHistory && history.length > 0 && (
+                <Paper
+                  sx={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    zIndex: 1000,
+                    mt: 0.5,
+                    maxHeight: 300,
+                    overflow: 'auto',
+                    boxShadow: 3,
+                  }}
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      p: 1,
+                      px: 2,
+                      borderBottom: 1,
+                      borderColor: 'divider',
+                    }}
+                  >
+                    <Typography variant="subtitle2">历史记录</Typography>
+                    <Tooltip title="清空所有">
+                      <IconButton
+                        size="small"
+                        onClick={clearAllHistory}
+                        color="error"
+                      >
+                        <ClearAllIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                  <List dense>
+                    {history.map((item, index) => (
+                      <React.Fragment key={index}>
+                        <ListItem
+                          button
+                          onClick={() => handleHistoryItem(item)}
+                          sx={{
+                            '&:hover': {
+                              backgroundColor: 'action.hover',
+                            },
+                          }}
+                        >
+                          <ListItemText primary={item} />
+                          <ListItemSecondaryAction>
+                            <IconButton
+                              edge="end"
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteHistoryItem(item);
+                              }}
+                              color="error"
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </ListItemSecondaryAction>
+                        </ListItem>
+                        {index < history.length - 1 && <ListDivider />}
+                      </React.Fragment>
+                    ))}
+                  </List>
+                </Paper>
+              )}
+            </Box>
           </Grid>
           <Grid item xs={12} sm={2}>
             <FormControl fullWidth>
