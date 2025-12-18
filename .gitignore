@@ -12,4 +12,5 @@ yarn-error.log*
 frontend/build/
 backend/node_modules/
 frontend/node_modules/
+.cursor/
 
