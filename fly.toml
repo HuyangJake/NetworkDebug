@@ -1,0 +1,22 @@
+# Fly.io 配置文件
+app = "network-debug"  # 替换为你的应用名称
+primary_region = "sin"  # 选择离你最近的区域: sin(新加坡), hkg(香港), nrt(东京), iad(美国东部)
+
+[build]
+  builder = "dockerfile"
+
+[env]
+  PORT = "3001"
+  NODE_ENV = "production"
+
+[[services]]
+  internal_port = 3001
+  protocol = "tcp"
+  
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+  
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]

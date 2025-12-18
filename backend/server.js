@@ -10,7 +10,8 @@ const http = require('http');
 const { URL } = require('url');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
+const path = require('path');
 
 app.use(cors());
 app.use(express.json());
@@ -847,6 +848,21 @@ app.post('/api/http-test', async (req, res) => {
     res.status(500).json(errorResult);
   }
 });
+
+// 提供静态文件服务（前端构建产物）
+// 必须在所有API路由之后，作为fallback
+const publicPath = path.join(__dirname, 'public');
+const fs = require('fs');
+if (fs.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+  
+  // 所有非API路由都返回前端应用（用于React Router）
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(path.join(publicPath, 'index.html'));
+    }
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`服务器运行在 http://localhost:${PORT}`);
