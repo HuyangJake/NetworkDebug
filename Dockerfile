@@ -2,10 +2,10 @@
 FROM node:18-slim AS builder
 
 # 安装网络工具（用于后端）
+# 注意：在Debian Bookworm中，ping6包含在iputils-ping包中，不需要单独的iputils-ping6包
 RUN apt-get update && apt-get install -y \
     mtr-tiny \
     iputils-ping \
-    iputils-ping6 \
     && rm -rf /var/lib/apt/lists/*
 
 # 构建前端
@@ -19,10 +19,10 @@ RUN npm run build
 FROM node:18-slim
 
 # 安装网络工具
+# 注意：在Debian Bookworm中，ping6包含在iputils-ping包中，不需要单独的iputils-ping6包
 RUN apt-get update && apt-get install -y \
     mtr-tiny \
     iputils-ping \
-    iputils-ping6 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -35,9 +35,6 @@ COPY backend/ ./
 
 # 从前一阶段复制前端构建产物
 COPY --from=builder /app/frontend/build ./public
-
-# 修改server.js以提供静态文件服务
-# 在server.js末尾添加静态文件服务（如果还没有）
 
 EXPOSE 3001
 
