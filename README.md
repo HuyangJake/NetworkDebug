@@ -26,7 +26,7 @@
 - Express
 - 原生Node.js模块（net、dns、child_process）
 
-## 安装和运行
+## 快速开始
 
 ### 前置要求
 - Node.js >= 14
@@ -66,7 +66,7 @@ npm run client
 ```
 NetworkDebug/
 ├── backend/           # 后端API服务
-│   ├── server.js     # Express服务器
+│   ├── server.js     # Express服务器（包含静态文件服务）
 │   └── package.json
 ├── frontend/         # React前端应用
 │   ├── src/
@@ -74,15 +74,16 @@ NetworkDebug/
 │   │   ├── components/ # 公共组件
 │   │   └── App.js
 │   └── package.json
-├── Dockerfile        # Docker构建文件
+├── Dockerfile        # Docker构建文件（多阶段构建）
 ├── fly.toml         # Fly.io配置文件
+├── .dockerignore    # Docker忽略文件
 └── package.json      # 根package.json
 ```
 
 ## API接口
 
 ### GET /api/ip-addresses
-获取本机IP地址
+获取本机IP地址（支持IPv4和IPv6）
 
 ### POST /api/port-scan
 端口扫描
@@ -103,7 +104,7 @@ DNS解析
 ```
 
 ### POST /api/ping
-Ping测试
+Ping测试（自动支持IPv4和IPv6）
 ```json
 {
   "host": "8.8.8.8",
@@ -145,7 +146,7 @@ HTTP/HTTPS连接测试
 - 自动保存成功执行的输入
 - 最多保存20条历史记录
 - 支持快速选择和删除
-- 各功能历史记录相互独立
+- 各功能历史记录相互独立（使用不同的localStorage键）
 
 ### 智能重试机制
 - 公网IP检测支持多服务源和重试机制
@@ -160,32 +161,19 @@ HTTP/HTTPS连接测试
 - 端口扫描
 - 提供问题分析和建议措施
 
-## 注意事项
+## 一键部署
 
-1. **MTR功能**：需要系统安装mtr工具
-   - macOS: `brew install mtr`
-   - Linux: `apt-get install mtr-tiny` 或 `yum install mtr`
-
-2. **端口扫描**：扫描大量端口可能需要较长时间，建议合理设置超时时间
-
-3. **权限要求**：某些网络操作可能需要管理员权限
-
-4. **IPv6支持**：确保系统支持IPv6网络，ping6命令需要系统支持
-
-5. **公网IP检测**：如果多次尝试无法获取IP，可以访问 [北京市IPv6发展平台](https://www.bj-ipv6.com/z/) 自行确认
-
-## 一键部署（推荐）
-
-### 使用Fly.io部署（开箱即用）
+### 使用Fly.io部署（推荐⭐⭐⭐）
 
 **优势**：
-- ✅ 前后端一起部署，无需分离配置
+- ✅ 前后端一起部署，开箱即用
 - ✅ 完整支持IPv6（自动分配IPv6地址）
 - ✅ 支持执行系统命令（ping、ping6、mtr）
 - ✅ 免费额度充足（每月160GB小时）
 - ✅ 全球边缘部署，速度快
+- ✅ 自动HTTPS证书
 
-#### 快速开始
+#### 部署步骤
 
 1. **安装Fly.io CLI**
 ```bash
@@ -224,25 +212,29 @@ flyctl status
 flyctl open  # 在浏览器中打开应用
 ```
 
-#### 后续更新
+#### 常用命令
 
 ```bash
+# 更新部署
 flyctl deploy
-```
 
-#### 查看日志
-
-```bash
+# 查看日志
 flyctl logs
-```
 
-#### 查看IPv6地址
+# 查看应用状态
+flyctl status
 
-```bash
+# 查看IPv6地址
 flyctl ips list
+
+# 打开应用
+flyctl open
+
+# 查看应用信息
+flyctl info
 ```
 
-### 使用Railway部署（备选方案）
+### 使用Railway部署（备选方案⭐⭐）
 
 1. 访问 [Railway](https://railway.app/)
 2. 使用GitHub账号登录
@@ -250,6 +242,8 @@ flyctl ips list
 4. 选择你的仓库
 5. Railway会自动检测Dockerfile并部署
 6. 等待部署完成，Railway会提供访问URL
+
+**注意**：Railway需要确保Dockerfile在项目根目录，并且可能需要手动配置端口。
 
 ## 本地构建和测试
 
@@ -282,6 +276,25 @@ cp -r ../frontend/build ./public
 node server.js
 ```
 
+访问：http://localhost:3001
+
+## 注意事项
+
+1. **MTR功能**：需要系统安装mtr工具
+   - macOS: `brew install mtr`
+   - Linux: `apt-get install mtr-tiny` 或 `yum install mtr`
+   - Docker镜像已包含mtr工具
+
+2. **端口扫描**：扫描大量端口可能需要较长时间，建议合理设置超时时间
+
+3. **权限要求**：某些网络操作可能需要管理员权限
+
+4. **IPv6支持**：确保系统支持IPv6网络，ping6命令需要系统支持
+
+5. **公网IP检测**：如果多次尝试无法获取IP，可以访问 [北京市IPv6发展平台](https://www.bj-ipv6.com/z/) 自行确认
+
+6. **部署环境**：部署到生产环境时，确保后端支持IPv6和系统命令执行
+
 ## 部署检查清单
 
 - [ ] 应用部署成功
@@ -291,6 +304,29 @@ node server.js
 - [ ] 系统命令可用（ping、ping6、mtr）
 - [ ] 测试所有功能是否正常
 - [ ] 测试IPv6相关功能（ping IPv6域名、DNS AAAA记录等）
+- [ ] HTTPS证书正常（Fly.io自动配置）
+
+## 常见问题
+
+### Q: 部署后无法访问？
+A: 检查以下几点：
+- 确认部署成功（`flyctl status`）
+- 检查防火墙设置
+- 确认端口配置正确（默认3001）
+
+### Q: IPv6功能不工作？
+A: 确保：
+- 部署平台支持IPv6（Fly.io自动支持）
+- 系统命令可用（Docker镜像已包含）
+- 测试IPv6地址格式正确
+
+### Q: MTR功能报错？
+A: 确保：
+- 系统已安装mtr工具（Docker镜像已包含）
+- 有执行权限
+
+### Q: 如何更新部署？
+A: 使用 `flyctl deploy` 命令，会自动构建并部署最新代码
 
 ## 许可证
 
